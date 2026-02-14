@@ -1,0 +1,1282 @@
+{
+  "name": "Sreality Search & Filter template",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "f067432b-2e78-4c31-a583-c1d7aa158582",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -400,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.sreality.cz/api/en/v2/estates?category_main_cb=1&category_type_cb=2&locality_region_id={{ $('Set Parameters - Only thing to setup').item.json.city }}&locality_district_id={{ $('Set Parameters - Only thing to setup').item.json.regions }}&per_page=40&sort=3",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fca0b554-8440-466b-b1cf-9cb95ceebc98",
+      "name": "Get Apartments List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1392,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract estates from the response\nconst input_json = JSON.parse($input.first().json.data)\nconst estates = input_json._embedded.estates;\n\n// Pass parameters along with each estate\nconst maxPrice = $('Set Parameters - Only thing to setup').first().json.maxPrice;\nconst minUsableArea = $('Set Parameters - Only thing to setup').first().json.minUsableArea;\nconst maxDistanceTime = $('Set Parameters - Only thing to setup').first().json.maxDistanceTime;\nconst maxDistanceAddress = $('Set Parameters - Only thing to setup').first().json.maxDistanceAddress;\nconst googleMapsApiKey = $('Set Parameters - Only thing to setup').first().json.googleMapsApiKey;\n\nreturn estates.map(estate => ({\n  json: {\n    hash_id: estate.hash_id,\n    name: estate.name,\n    address: estate.locality,\n    price_czk: estate.price_czk.value_raw,\n    seo: estate.seo.locality,\n    maxPrice,\n    minUsableArea,\n    maxDistanceTime,\n    maxDistanceAddress,\n    googleMapsApiKey\n  }\n}));"
+      },
+      "id": "7de60f23-8e7b-4ce8-a419-9b141236583f",
+      "name": "Extract Estates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "e8bca305-44ac-4518-96d5-1eb0f75f88ec",
+      "name": "Loop Over Estates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1840,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.sreality.cz/api/en/v2/estates/{{ $('Loop Over Estates').item.json.hash_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cb2679bf-b273-4bff-ab97-bfe4c0ec0540",
+      "name": "Get Estate Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2736,
+        -864
+      ],
+      "retryOnFail": false,
+      "alwaysOutputData": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function validUpdateTime(updateItem, maxLastUpdateDays) {\n  if (!updateItem || !updateItem.value) return false;\n\n  const now = new Date();\n  now.setHours(0, 0, 0, 0);\n\n  // Step 1: Parse the update value into a Date\n  let updateDate;\n  const value = updateItem.value.trim();\n\n  if (value === 'Today') {\n    updateDate = new Date(now);\n  } else if (value === 'Yesterday') {\n    updateDate = new Date(now);\n    updateDate.setDate(updateDate.getDate() - 1);\n  } else {\n    // Parse \"DD.MM.YYYY\"\n    const [day, month, year] = value.split('.');\n    updateDate = new Date(Number(year), Number(month) - 1, Number(day));\n  }\n\n  // Step 2: Create comparison date (today minus maxLastUpdateDays)\n  const comparisonDate = new Date(now);\n  comparisonDate.setDate(comparisonDate.getDate() - maxLastUpdateDays);\n\n  // Step 3: Compare\n  return updateDate >= comparisonDate;\n}\n\nconst estateData = JSON.parse($('Get Estate Details').first().json.data)\n\nconst prevData = $('Loop Over Estates').first().json;\n\n// Find the Update item\nconst items = estateData.items || [];\nconst updateItem = items.find(item => item.name === 'Update');\nconst usableAreaItem = items.find(item => item.name === 'Usable area');\n\n// Check if update is valid according to max last update param\nconst isValidUpdateTime = validUpdateTime(updateItem,$('Set Parameters - Only thing to setup').first().json.maxLastUpdateDays);\n\n// Extract usable area\nconst usableArea = usableAreaItem ? parseInt(usableAreaItem.value) : 0;\n\n// Extract price\nconst priceRaw = estateData.price_czk?.value_raw || 0;\n\n// Extract locality for URL\nconst seoLocality = estateData.seo?.locality || '';\n\n// Extract GPS coordinates\nconst gps = estateData.map?.lat && estateData.map?.lon \n  ? `${estateData.map.lat},${estateData.map.lon}` \n  : '';\n\n// Extract seller Email\nconst sellerEmail = estateData._embedded?.seller?.email || '';\n\n// Extract seller Name\nconst sellerName = estateData._embedded?.seller?.user_name || '';\n\n// Build the apartment URL\nconst apartmentUrl = `https://www.sreality.cz/en/detail/lease/flat/1+kt/${seoLocality}/${prevData.hash_id}`;\n\nreturn [{\n  json: {\n    hash_id: prevData.hash_id,\n    name: estateData.name.value,\n    locality: estateData.locality?.value || '',\n    price: priceRaw,\n    usableArea: usableArea,\n    isValidUpdate: isValidUpdateTime,\n    gps: gps,\n    apartmentUrl: apartmentUrl,\n    seoLocality: seoLocality,\n    maxPrice: prevData.maxPrice,\n    minUsableArea: prevData.minUsableArea,\n    maxDistanceTime: prevData.maxDistanceTime,\n    maxDistanceAddress: prevData.maxDistanceLatLon,\n    googleMapsApiKey: prevData.googleMapsApiKey,\n    sellerEmail: sellerEmail,\n    sellerName: sellerName\n  }\n}];"
+      },
+      "id": "529a5cc2-db85-4121-8f23-2a6bf8c59759",
+      "name": "Process Estate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3408,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "condition-price",
+              "leftValue": "={{ $json.price }}",
+              "rightValue": "={{ $json.maxPrice }}",
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            },
+            {
+              "id": "condition-area",
+              "leftValue": "={{ $json.usableArea }}",
+              "rightValue": "={{ $json.minUsableArea }}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c7f07d6e-079c-44ff-b1cd-21db37ee5efa",
+      "name": "Filter: New, Price, Area",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3856,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://maps.googleapis.com/maps/api/distancematrix/json?origins={{ $json.gps }}&destinations={{ $json.maxDistanceAddress }}&mode=transit&key={{ $json.googleMapsApiKey }}",
+        "options": {}
+      },
+      "id": "0e227445-cd20-4cc7-9e68-83c0a390d317",
+      "name": "Google Maps Distance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4080,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prevData = $('Filter: New, Price, Area').first().json;\nconst mapsResponse = $input.first().json;\n\n// Extract duration in seconds\nlet durationSeconds = 0;\nlet durationText = 'N/A';\n\ntry {\n  const element = mapsResponse.rows?.[0]?.elements?.[0];\n  if (element && element.status === 'OK') {\n    durationSeconds = element.duration?.value || 0;\n    durationText = element.duration?.text || 'N/A';\n  }\n} catch (e) {\n  // Keep defaults\n}\n\nreturn [{\n  json: {\n    ...prevData,\n    distanceSeconds: durationSeconds,\n    distanceText: durationText\n  }\n}];"
+      },
+      "id": "9a630ebe-47e1-4bd4-ad78-8b2352058c91",
+      "name": "Process Distance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4304,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "condition-distance",
+              "leftValue": "={{ $json.distanceSeconds }}",
+              "rightValue": "={{ $json.maxDistanceTime }}",
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "103dc8f7-6acb-495b-a62e-ff3e97a69052",
+      "name": "Filter: Distance",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4528,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "1ed0b630-ca92-42fd-93b4-6960c60548fe",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2512,
+        -1056
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "28609efe-5ff7-446a-afd1-1dab994c20cd",
+              "leftValue": "={{ $json.data }}",
+              "rightValue": "price_czk",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2960,
+        -864
+      ],
+      "id": "5b5f5c28-3288-4cc4-8d09-acd75443ed22",
+      "name": "Valid Response"
+    },
+    {
+      "parameters": {
+        "operation": "rowExists",
+        "dataTableId": {
+          "__rl": true,
+          "value": "fA1Mv144RMCEHzTA",
+          "mode": "list",
+          "cachedResultName": "sreality_hash_ids",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/fA1Mv144RMCEHzTA"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hash",
+              "keyValue": "={{ $json.hash_id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2064,
+        -864
+      ],
+      "id": "efc67a70-c1bf-4f62-9fb3-8eb45dfca0d5",
+      "name": "Apartment in data?",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "520a0c36-a7f1-4ffa-b873-b518dbfbce17",
+              "leftValue": "={{ $json.hash_id }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "notExists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2288,
+        -864
+      ],
+      "id": "94e2b59e-b12f-408e-aea1-3e57276a4389",
+      "name": "If apartment not in data"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "cTaWMMDpQD0bLe1j",
+          "mode": "list",
+          "cachedResultName": "Valid Apartments",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/cTaWMMDpQD0bLe1j"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "hash_id",
+              "condition": "isNotEmpty"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2288,
+        -1056
+      ],
+      "id": "9da42b93-8c47-4810-abde-86408715b0a6",
+      "name": "Get valid apartments"
+    },
+    {
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "cTaWMMDpQD0bLe1j",
+          "mode": "list",
+          "cachedResultName": "Valid Apartments",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/cTaWMMDpQD0bLe1j"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "condition": "isNotEmpty"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3184,
+        -1056
+      ],
+      "id": "4505da2f-b675-42d7-8c44-22a890990c70",
+      "name": "Clean valid apartments",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "fA1Mv144RMCEHzTA",
+          "mode": "list",
+          "cachedResultName": "sreality_hash_ids",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/fA1Mv144RMCEHzTA"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "createdAt",
+              "condition": "lte",
+              "keyValue": "={{ $today.minus({days: 7}) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3408,
+        -1056
+      ],
+      "id": "d5bf742f-821b-4e8c-8ceb-dd3d89249797",
+      "name": "Delete old apartments"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "cTaWMMDpQD0bLe1j",
+          "mode": "list",
+          "cachedResultName": "Valid Apartments",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/cTaWMMDpQD0bLe1j"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "hash_id": "={{ $json.hash_id }}",
+            "ETA": "={{ Math.round($json.distanceSeconds /60)}}",
+            "Area": "={{ $json.usableArea }}",
+            "Price": "={{ $json.price }}",
+            "url": "={{ $json.apartmentUrl }}",
+            "seller_email": "={{ $json.sellerEmail }}",
+            "seller_name": "={{ $json.sellerName}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "hash_id",
+              "displayName": "hash_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ETA",
+              "displayName": "ETA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Area",
+              "displayName": "Area",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Price",
+              "displayName": "Price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "seller_email",
+              "displayName": "seller_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "seller_name",
+              "displayName": "seller_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        4752,
+        -800
+      ],
+      "id": "7bf421b7-6a1e-455b-8154-cbe0735bc539",
+      "name": "Valid apartment!"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "fA1Mv144RMCEHzTA",
+          "mode": "list",
+          "cachedResultName": "sreality_hash_ids",
+          "cachedResultUrl": "/projects/wtx8J5jkjCzWgZ6B/datatables/fA1Mv144RMCEHzTA"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "hash": "={{ $('Loop Over Estates').item.json.hash_id }}"
+          },
+          "matchingColumns": [
+            "hash"
+          ],
+          "schema": [
+            {
+              "id": "hash",
+              "displayName": "hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3184,
+        -864
+      ],
+      "id": "c072bc21-6158-4a64-b5b1-f339c306f014",
+      "name": "Save to long term memory"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2064,
+        -1056
+      ],
+      "id": "48c459a5-b630-4d2d-8277-48c0f0a11297",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        48,
+        -576
+      ],
+      "id": "efe3c4ba-4179-4a45-99b7-8b3eb1d68b19",
+      "name": "List data tables"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        272,
+        -576
+      ],
+      "id": "f6bfc7e0-f118-43ef-baf5-b14944a5dd67",
+      "name": "Aggregate1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "59891010-616c-4bb0-9084-14b8bbdc205f",
+              "leftValue": "={{ $json.hash_table_esitst }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "0af919fc-0ae0-4023-8345-554736c547fd",
+              "leftValue": "={{ $json.valid_leases_exists }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        720,
+        -576
+      ],
+      "id": "820a2fc6-89f3-4a44-a466-c68357605883",
+      "name": "Check if helper databases exist"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cab23c44-a9ed-4a76-b141-9d18d72138df",
+              "name": "Explanation. Please copy into a pretty json formatter",
+              "value": "{   \"overview\": {     \"description\": \"This automation was created so that only two nodes need to be edited for it to work:\",     \"nodesToEdit\": [       \"This node (the params)\",       \"The Gmail node (need to setup credentials)\"     ]   },   \"params\": {     \"maxPrice\": {       \"description\": \"The max price in CZK. Needs to be a valid number. Used to filter relevant leases.\",       \"example\": 40000     },     \"minUsableArea\": {       \"description\": \"In square meters. Used to filter relevant leases.\",       \"example\": 60     },     \"maxDistanceTime\": {       \"description\": \"Max time in minutes from the apartment to the target address with public transport. Uses Google Maps API. Created because it was important for us to find an apartment close to our son's kindergarten.\",       \"example\": 20     },     \"maxDistanceLatLon\": {       \"description\": \"The address to calculate estimated time of arrival for. Uses the format 'lat,lon'.\",       \"example\": \"32.090605,34.869473\"     },     \"googleMapsApiKey\": {       \"description\": \"Your Google Maps API key, from the Google Cloud Console.\"     },     \"emailRecipient\": {       \"description\": \"The recipients to receive all new listings found. Multiple recipients can be separated by commas.\",       \"example\": \"person1@gmail.com,person2@gmail.com\"     },     \"maxLastUpdateDays\": {       \"description\": \"Filters out apartments older than the given number of days. Especially useful for the first run. After the first run it's less important since we save all apartments we already saw.\",       \"example\": 7     },     \"city\": {       \"description\": \"City ID in the Sreality API. 10 means Prague. There are no docs, but Gemini knows the values, so ask Gemini if you want a different city.\",       \"example\": 10     },     \"regions\": {       \"description\": \"The regions to search for in the city. 500 is the prefix for Prague, so 5001 is Prague 1, 5002 is Prague 2, etc. '%7C' is HTML encoding for '|' which means 'or'. Ask Gemini for values.\",       \"example\": \"5001%7C5002%7C5003\"     }   },   \"closing\": \"Good luck!\" }",
+              "type": "object"
+            },
+            {
+              "id": "4e59d9a7-2f50-4ac9-8c1f-c08065d6e1b2",
+              "name": "maxPrice",
+              "value": null,
+              "type": "number"
+            },
+            {
+              "id": "9f379eb0-49c6-49f8-a96a-114b51b8988d",
+              "name": "minUsableArea",
+              "value": null,
+              "type": "number"
+            },
+            {
+              "id": "369bdad8-e417-460f-a9eb-6422503b4d91",
+              "name": "maxDistanceTime",
+              "value": null,
+              "type": "number"
+            },
+            {
+              "id": "df35d4e3-26d0-4159-b55e-31cfa717ee84",
+              "name": "maxDistanceLatLon",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "a13ddebf-9bd4-44d4-b808-86e35ee645b3",
+              "name": "googleMapsApiKey",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "139fd44c-8b9f-410d-ad72-51a6aa844e13",
+              "name": "emailRecipient",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfccb453-e3f4-4a44-9329-3d7f131136ae",
+              "name": "maxLastUpdateDays",
+              "value": 7,
+              "type": "number"
+            },
+            {
+              "id": "02c6c9b8-f29b-410a-8bf6-e24dd9d0f5d2",
+              "name": "city",
+              "value": "10",
+              "type": "string"
+            },
+            {
+              "id": "36d68101-27b7-4991-bee6-c53c2b8b368b",
+              "name": "regions",
+              "value": "5001%7C5002%7C5005",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5be4d973-bdb3-4f29-a6c3-c7d3c813280c",
+      "name": "Set Parameters - Only thing to setup",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -176,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "condition-today",
+              "leftValue": "={{ $json.isValidUpdate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8d678359-7c6d-4516-83b3-b38ef7aa8b3f",
+      "name": "Is Update time relevant?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3632,
+        -864
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function parseIfNeeded(input) {\n   const parsed = typeof input === 'string' ? JSON.parse(input) : input;\n   return Array.isArray(parsed) ? parsed : [parsed];\n}\n\nfunction hasDataWithName(arr, name) {\n  return arr.some(item => item.data?.some(d => d.name === name));\n}\nconst arr = parseIfNeeded($input.first().json)\nconst hash_table_exists = hasDataWithName(arr,\"sreality_hash_ids\");\n\nconst valid_leases_exists = hasDataWithName(arr,\"Valid Apartments\");\n\nreturn {\n  \"hash_table_esitst\": hash_table_exists,\n  \"valid_leases_exists\": valid_leases_exists\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        -576
+      ],
+      "id": "ef3a04d3-cf63-4695-8c27-fb86aa292835",
+      "name": "Check tables existence"
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "sreality_hash_ids",
+        "columns": {
+          "column": [
+            {
+              "name": "hash",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        944,
+        -512
+      ],
+      "id": "61576618-5817-4875-a1e4-fa41adfa3600",
+      "name": "Create a long term memory"
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "Valid Apartments",
+        "columns": {
+          "column": [
+            {
+              "name": "hash_id"
+            },
+            {
+              "name": "ETA"
+            },
+            {
+              "name": "Area"
+            },
+            {
+              "name": "Price"
+            },
+            {
+              "name": "url"
+            },
+            {
+              "name": "seller_email"
+            },
+            {
+              "name": "seller_name"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1168,
+        -512
+      ],
+      "id": "33b94d12-66b4-457c-b31d-a402de9adff7",
+      "name": "Create session memory"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2512,
+        -864
+      ],
+      "id": "b5f36fc8-df50-43c2-8268-65c9baad2bb8",
+      "name": "Wait to avoid block",
+      "webhookId": "5285b635-3227-410e-ba2e-5a04f8c742d9"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Set Parameters - Only thing to setup').item.json.emailRecipient }}",
+        "subject": "New Apartments!",
+        "message": "={{ $json.finalString }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2960,
+        -1056
+      ],
+      "id": "cf914fe8-eb69-4f66-828c-c6dfea38dc34",
+      "name": "Send a message (requires credentials)",
+      "webhookId": "95fd5779-e43a-4f1a-ae29-b09a4c3a4dc5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.first().json.data || [];\n\nif (items.length === 0) {\n  return [{ json: { emailBody: 'No new apartments matching your criteria found today.', hasResults: false } }];\n}\n\nconst emailParts = items.map(item => {\n  return `Link: ${item.url}<br>Usable Area: ${item.Area} m2<br>ETA From Kindergarten: ${item.ETA} minutes<br>Price: ${item.Price} CZK/month<br>Seller name: ${item.seller_name}<br>Seller email: ${item.seller_email}`;\n});\nconst finalString = emailParts.join('<br><br>')\nreturn {json: {'finalString':finalString}};\n\n//return [{ json: { emailBody: emailBody, hasResults: true, count: items.length } }];"
+      },
+      "id": "d54e9af8-3161-4d83-8b0c-07b79e83aaa0",
+      "name": "Create Email Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2736,
+        -1056
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters - Only thing to setup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Apartments List": {
+      "main": [
+        [
+          {
+            "node": "Extract Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Estates": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Estates": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apartment in data?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Estate Details": {
+      "main": [
+        [
+          {
+            "node": "Valid Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Estate Data": {
+      "main": [
+        [
+          {
+            "node": "Is Update time relevant?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: New, Price, Area": {
+      "main": [
+        [
+          {
+            "node": "Google Maps Distance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Maps Distance": {
+      "main": [
+        [
+          {
+            "node": "Process Distance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Distance": {
+      "main": [
+        [
+          {
+            "node": "Filter: Distance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Distance": {
+      "main": [
+        [
+          {
+            "node": "Valid apartment!",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Create Email Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Response": {
+      "main": [
+        [
+          {
+            "node": "Save to long term memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apartment in data?": {
+      "main": [
+        [
+          {
+            "node": "If apartment not in data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If apartment not in data": {
+      "main": [
+        [
+          {
+            "node": "Wait to avoid block",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get valid apartments": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean valid apartments": {
+      "main": [
+        [
+          {
+            "node": "Delete old apartments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid apartment!": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to long term memory": {
+      "main": [
+        [
+          {
+            "node": "Process Estate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Get valid apartments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List data tables": {
+      "main": [
+        [
+          {
+            "node": "Aggregate1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate1": {
+      "main": [
+        [
+          {
+            "node": "Check tables existence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if helper databases exist": {
+      "main": [
+        [
+          {
+            "node": "Get Apartments List",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create a long term memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters - Only thing to setup": {
+      "main": [
+        [
+          {
+            "node": "List data tables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Update time relevant?": {
+      "main": [
+        [
+          {
+            "node": "Filter: New, Price, Area",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Estates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check tables existence": {
+      "main": [
+        [
+          {
+            "node": "Check if helper databases exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a long term memory": {
+      "main": [
+        [
+          {
+            "node": "Create session memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create session memory": {
+      "main": [
+        [
+          {
+            "node": "Get Apartments List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait to avoid block": {
+      "main": [
+        [
+          {
+            "node": "Get Estate Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message (requires credentials)": {
+      "main": [
+        [
+          {
+            "node": "Clean valid apartments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Email Message": {
+      "main": [
+        [
+          {
+            "node": "Send a message (requires credentials)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "781ac037-df10-4bf5-b175-dcdee78f6236",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "194791e2d5e6a75b55741938263d3c2ae008600c433a51c3533986d80ea6db04"
+  },
+  "id": "dNmNsMKusLxj7XEn",
+  "tags": []
+}
